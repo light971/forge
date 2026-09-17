@@ -1,0 +1,174 @@
+{
+  "name": "Forge — Rapport hebdo GA4 + Search Console (analysé par Claude)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [1],
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "id": "schedule_trigger",
+      "name": "Chaque lundi 8h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://analyticsdata.googleapis.com/v1beta/properties/{{$env.GA4_PROPERTY_ID}}:runReport",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleAnalyticsOAuth2",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"dateRanges\": [{ \"startDate\": \"7daysAgo\", \"endDate\": \"today\" }],\n  \"dimensions\": [{ \"name\": \"customEvent:cocon\" }],\n  \"metrics\": [\n    { \"name\": \"sessions\" },\n    { \"name\": \"engagementRate\" },\n    { \"name\": \"eventCount\" }\n  ]\n}"
+      },
+      "id": "ga4_request",
+      "name": "GA4 — Rapport par cocon",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, -80]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://www.googleapis.com/webmasters/v3/sites/https%3A%2F%2Fforge.fr%2F/searchAnalytics/query",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"startDate\": \"{{$now.minus({days:7}).toFormat('yyyy-MM-dd')}}\",\n  \"endDate\": \"{{$now.toFormat('yyyy-MM-dd')}}\",\n  \"dimensions\": [\"query\"],\n  \"rowLimit\": 15\n}"
+      },
+      "id": "gsc_request",
+      "name": "Search Console — Top requêtes",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 80]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition"
+      },
+      "id": "merge_data",
+      "name": "Fusionner GA4 + GSC",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [460, 0]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "promptData",
+              "type": "string",
+              "value": "=Données GA4 (par cocon éditorial, 7 derniers jours) :\n{{ JSON.stringify($('GA4 — Rapport par cocon').item.json.rows, null, 2) }}\n\nTop requêtes Search Console (7 derniers jours) :\n{{ JSON.stringify($('Search Console — Top requêtes').item.json.rows, null, 2) }}"
+            }
+          ]
+        }
+      },
+      "id": "format_prompt",
+      "name": "Formater le prompt",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [680, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "anthropic-version", "value": "2023-06-01" },
+            { "name": "content-type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"claude-sonnet-4-6\",\n  \"max_tokens\": 700,\n  \"system\": \"Tu es analyste marketing pour Forge, marque de compléments/accessoires street workout. Analyse les données GA4 et Search Console fournies et rédige un résumé court (150-200 mots) en français, direct et sans blabla, avec : 1) le cocon éditorial qui performe le mieux et pourquoi, 2) une requête de recherche à exploiter en priorité pour un futur article, 3) une alerte si un cocon sous-performe. Ton factuel, orienté action.\",\n  \"messages\": [\n    { \"role\": \"user\", \"content\": {{ JSON.stringify($json.promptData) }} }\n  ]\n}"
+      },
+      "id": "claude_analysis",
+      "name": "Analyse Claude API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [900, 0]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "summary",
+              "type": "string",
+              "value": "={{ $json.content[0].text }}"
+            }
+          ]
+        }
+      },
+      "id": "extract_summary",
+      "name": "Extraire le texte de synthèse",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1120, 0]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "mode": "name",
+          "value": "#forge-reporting"
+        },
+        "text": "=📊 *Rapport hebdo Forge — {{$now.toFormat('dd/MM/yyyy')}}*\n\n{{$json.summary}}",
+        "otherOptions": {}
+      },
+      "id": "slack_send",
+      "name": "Envoyer sur Slack",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1340, 0]
+    }
+  ],
+  "connections": {
+    "Chaque lundi 8h": {
+      "main": [
+        [
+          { "node": "GA4 — Rapport par cocon", "type": "main", "index": 0 },
+          { "node": "Search Console — Top requêtes", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "GA4 — Rapport par cocon": {
+      "main": [[{ "node": "Fusionner GA4 + GSC", "type": "main", "index": 0 }]]
+    },
+    "Search Console — Top requêtes": {
+      "main": [[{ "node": "Fusionner GA4 + GSC", "type": "main", "index": 1 }]]
+    },
+    "Fusionner GA4 + GSC": {
+      "main": [[{ "node": "Formater le prompt", "type": "main", "index": 0 }]]
+    },
+    "Formater le prompt": {
+      "main": [[{ "node": "Analyse Claude API", "type": "main", "index": 0 }]]
+    },
+    "Analyse Claude API": {
+      "main": [[{ "node": "Extraire le texte de synthèse", "type": "main", "index": 0 }]]
+    },
+    "Extraire le texte de synthèse": {
+      "main": [[{ "node": "Envoyer sur Slack", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
